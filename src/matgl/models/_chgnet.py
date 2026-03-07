@@ -58,6 +58,8 @@ def _compute_surface_descriptors(
     eps: float = 1e-8,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute differentiable surface degree and local surface normal from local geometry."""
+    bond_vec = bond_vec.float()
+    bond_dist = bond_dist.float()
     _, dst = g.edges()
     n_atoms = g.num_nodes()
     device = bond_vec.device
@@ -80,6 +82,8 @@ def _compute_surface_descriptors(
     anisotropy = torch.clamp(1.0 - 3.0 * eigvals[:, 0] / (eigvals.sum(dim=1) + eps), min=0.0, max=1.0)
 
     surface_degree = torch.sigmoid(alpha1 * coord_deficit + alpha2 * anisotropy)
+    surface_degree = torch.nan_to_num(surface_degree, nan=0.0, posinf=1.0, neginf=0.0)
+    surface_normals = torch.nan_to_num(surface_normals, nan=0.0, posinf=0.0, neginf=0.0)
     return surface_degree, surface_normals
 
 
@@ -100,6 +104,10 @@ def _compute_surface_edge_gates(
     eps: float = 1e-8,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute anisotropic surface-aware edge gates for CHGNet atom graph."""
+    bond_vec = bond_vec.float()
+    bond_dist = bond_dist.float()
+    surface_degree = surface_degree.float()
+    surface_normals = surface_normals.float()
     src, dst = g.edges()
     direction = bond_vec / (bond_dist[:, None] + eps)
     c2 = (direction * surface_normals[dst]).sum(dim=-1).pow(2)
@@ -115,6 +123,9 @@ def _compute_surface_edge_gates(
         gate_node = gate_node * adaptive_gate
         gate_edge = gate_edge * adaptive_gate
 
+    gate_node = torch.nan_to_num(gate_node, nan=1.0, posinf=1.0, neginf=1.0)
+    gate_edge = torch.nan_to_num(gate_edge, nan=1.0, posinf=1.0, neginf=1.0)
+    c2 = torch.nan_to_num(c2, nan=0.0, posinf=1.0, neginf=0.0)
     return gate_node[:, None], gate_edge[:, None], c2
 
 
@@ -470,6 +481,10 @@ class CHGNet(MatGLModel):
                 alpha1=self.surface_alpha1,
                 alpha2=self.surface_alpha2,
             )
+            # Stabilize training: gradients through eigendecomposition can become singular
+            # for nearly degenerate local environments and cause NaNs.
+            surface_degree = surface_degree.detach()
+            surface_normals = surface_normals.detach()
             node_gate, edge_gate, c2 = _compute_surface_edge_gates(
                 g=g,
                 bond_vec=bond_vec,
@@ -488,6 +503,8 @@ class CHGNet(MatGLModel):
             g.ndata["surface_degree"] = surface_degree
             g.ndata["surface_normal"] = surface_normals
             g.edata["surface_c2"] = c2
+            node_gate = node_gate.to(bond_features.dtype)
+            edge_gate = edge_gate.to(bond_features.dtype)
             g.edata["surface_gate_node"] = node_gate
             g.edata["surface_gate_edge"] = edge_gate
             bond_features = bond_features * edge_gate

@@ -12,17 +12,34 @@ source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install "numpy<2"
 
-# Pinned stack verified to work with CHGNet + DGL backend on Python 3.12.
+# Pinned stack for modern NVIDIA GPUs (e.g., RTX 50xx).
 python -m pip install \
-  torch==2.4.0+cu121 \
-  torchvision==0.19.0+cu121 \
-  torchaudio==2.4.0+cu121 \
-  --index-url https://download.pytorch.org/whl/cu121
+  torch==2.9.1 \
+  torchvision==0.24.1 \
+  torchaudio==2.9.1
 
 python -m pip install torchdata==0.8.0
-python -m pip install "https://data.dgl.ai/wheels/torch-2.4/dgl-2.4.0-cp312-cp312-manylinux1_x86_64.whl"
+python -m pip install "https://data.dgl.ai/wheels/cu121/dgl-2.1.0%2Bcu121-cp312-cp312-manylinux1_x86_64.whl"
 python -m pip install lightning<=2.6.0 pymatgen ase pydantic boto3 torch-geometric
 python -m pip install -e . --no-deps
+
+# DGL 2.1.0 graphbolt does not ship a binary for torch 2.9.x, but graphbolt is
+# not required for current CHGNet training path. Patch to skip hard failure.
+python - <<'PY'
+from pathlib import Path
+p = Path(".venv/lib/python3.12/site-packages/dgl/graphbolt/__init__.py")
+txt = p.read_text()
+txt = txt.replace(
+    "    if not os.path.exists(path):\n        raise FileNotFoundError(\n            f\"Cannot find DGL C++ graphbolt library at {path}\"\n        )\n",
+    "    if not os.path.exists(path):\n        return\n",
+)
+txt = txt.replace(
+    "    except Exception:  # pylint: disable=W0703\n        raise ImportError(\"Cannot load Graphbolt C++ library\")\n",
+    "    except Exception:  # pylint: disable=W0703\n        return\n",
+)
+p.write_text(txt)
+print(f\"[OK] Patched graphbolt loader: {p}\")
+PY
 
 echo
 echo "[OK] CHGNet environment install complete."
