@@ -783,6 +783,8 @@ class CHGNetGraphConv(nn.Module):
             rbf = edges.data["bond_expansion"]
             rbf = rbf.float()
             edge_update = edge_update * self.edge_weight_func(rbf)
+        if "surface_gate_edge" in edges.data:
+            edge_update = edge_update * edges.data["surface_gate_edge"]
 
         return {"feat_update": edge_update}
 
@@ -824,6 +826,8 @@ class CHGNetGraphConv(nn.Module):
             inputs = torch.hstack([atom_i, bond_ij, atom_j])
 
         messages = self.node_update_func(inputs, graph)
+        if "surface_gate_node" in graph.edata:
+            messages = messages * graph.edata["surface_gate_node"]
 
         # smooth out the messages with layer-wise weights
         if self.node_weight_func is not None:
@@ -1126,6 +1130,8 @@ class CHGNetLineGraphConv(nn.Module):
         atom_ij = edges.data["aux_features"]  # center atom features
         inputs = torch.hstack([bonds_i, angle_ij, atom_ij, bonds_j])
         messages_ij = self.edge_update_func(inputs, edges._graph)  # type: ignore
+        if "surface_gate" in edges.data:
+            messages_ij = messages_ij * edges.data["surface_gate"]
         return {"feat_update": messages_ij}
 
     def edge_update_(self, graph: dgl.DGLGraph) -> Tensor:
@@ -1159,6 +1165,8 @@ class CHGNetLineGraphConv(nn.Module):
         inputs = torch.hstack([bonds_i, angle_ij, atom_ij, bonds_j])
 
         messages = self.node_update_func(inputs, graph)
+        if "surface_gate" in graph.edata:
+            messages = messages * graph.edata["surface_gate"]
 
         # smooth out messages with layer-wise weights
         if self.node_weight_func is not None:

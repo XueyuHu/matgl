@@ -18,7 +18,8 @@ DEFAULT_ELEMENTS = tuple(el.symbol for el in Element if el.symbol not in ["Po", 
 
 
 # Default location of the cache for matgl, e.g., for storing downloaded models.
-MATGL_CACHE = Path(os.path.expanduser("~")) / ".cache/matgl"
+# Allow overriding with MATGL_CACHE to support restricted environments.
+MATGL_CACHE = Path(os.environ.get("MATGL_CACHE", Path(os.path.expanduser("~")) / ".cache/matgl"))
 os.makedirs(MATGL_CACHE, exist_ok=True)
 
 # Download url for pre-trained models.

@@ -46,6 +46,78 @@ logger = logging.getLogger(__name__)
 DEFAULT_ELEMENTS = (*list(DEFAULT_ELEMENTS[:83]), "Po", "At", "Rn", "Fr", "Ra", *list(DEFAULT_ELEMENTS[83:]))
 
 
+def _compute_surface_descriptors(
+    g: dgl.DGLGraph,
+    bond_vec: torch.Tensor,
+    bond_dist: torch.Tensor,
+    coord_r0: float,
+    coord_power: float,
+    coord_ref: float,
+    alpha1: float,
+    alpha2: float,
+    eps: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute differentiable surface degree and local surface normal from local geometry."""
+    _, dst = g.edges()
+    n_atoms = g.num_nodes()
+    device = bond_vec.device
+    dtype = bond_vec.dtype
+
+    radial = torch.clamp(bond_dist / max(coord_r0, eps), min=0.0)
+    neigh_weights = torch.exp(-(radial**coord_power))
+
+    coord = torch.zeros(n_atoms, device=device, dtype=dtype)
+    coord.index_add_(0, dst, neigh_weights)
+    coord_deficit = torch.clamp((coord_ref - coord) / max(coord_ref, eps), min=0.0)
+
+    outer = torch.einsum("bi,bj->bij", bond_vec, bond_vec)
+    sigma = torch.zeros(n_atoms, 3, 3, device=device, dtype=dtype)
+    sigma.index_add_(0, dst, neigh_weights[:, None, None] * outer)
+    sigma = sigma + torch.eye(3, device=device, dtype=dtype).unsqueeze(0) * eps
+
+    eigvals, eigvecs = torch.linalg.eigh(sigma)
+    surface_normals = eigvecs[:, :, 0]
+    anisotropy = torch.clamp(1.0 - 3.0 * eigvals[:, 0] / (eigvals.sum(dim=1) + eps), min=0.0, max=1.0)
+
+    surface_degree = torch.sigmoid(alpha1 * coord_deficit + alpha2 * anisotropy)
+    return surface_degree, surface_normals
+
+
+def _compute_surface_edge_gates(
+    g: dgl.DGLGraph,
+    bond_vec: torch.Tensor,
+    bond_dist: torch.Tensor,
+    surface_degree: torch.Tensor,
+    surface_normals: torch.Tensor,
+    lambda1: float,
+    lambda2: float,
+    lambda3: float,
+    lambda4: float,
+    cutoff: float,
+    adaptive_cutoff_alpha: float,
+    adaptive_sharpness: float,
+    adaptive_receptive_field: bool,
+    eps: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute anisotropic surface-aware edge gates for CHGNet atom graph."""
+    src, dst = g.edges()
+    direction = bond_vec / (bond_dist[:, None] + eps)
+    c2 = (direction * surface_normals[dst]).sum(dim=-1).pow(2)
+    ui = surface_degree[dst]
+    uj = surface_degree[src]
+
+    gate_node = 1.0 + lambda1 * ui * uj + lambda2 * c2
+    gate_edge = 1.0 + lambda3 * ui + lambda4 * c2
+
+    if adaptive_receptive_field:
+        pair_cutoff = cutoff * (1.0 + adaptive_cutoff_alpha * torch.minimum(ui, uj))
+        adaptive_gate = torch.sigmoid(adaptive_sharpness * (pair_cutoff - bond_dist))
+        gate_node = gate_node * adaptive_gate
+        gate_edge = gate_edge * adaptive_gate
+
+    return gate_node[:, None], gate_edge[:, None], c2
+
+
 class CHGNet(MatGLModel):
     """Main CHGNet model."""
 
@@ -88,6 +160,19 @@ class CHGNet(MatGLModel):
         num_site_targets: int = 1,
         task_type: Literal["regression", "classification"] = "regression",
         error_handling: bool = True,
+        surface_aware: bool = False,
+        surface_coord_r0: float = 2.2,
+        surface_coord_power: float = 2.0,
+        surface_coord_ref: float = 12.0,
+        surface_alpha1: float = 2.5,
+        surface_alpha2: float = 1.5,
+        surface_lambda1: float = 0.5,
+        surface_lambda2: float = 0.5,
+        surface_lambda3: float = 0.5,
+        surface_lambda4: float = 0.5,
+        adaptive_receptive_field: bool = True,
+        adaptive_cutoff_alpha: float = 0.35,
+        adaptive_cutoff_sharpness: float = 8.0,
         **kwargs,
     ):
         """
@@ -314,6 +399,19 @@ class CHGNet(MatGLModel):
 
         self.task_type = task_type
         self.is_intensive = is_intensive
+        self.surface_aware = surface_aware
+        self.surface_coord_r0 = surface_coord_r0
+        self.surface_coord_power = surface_coord_power
+        self.surface_coord_ref = surface_coord_ref
+        self.surface_alpha1 = surface_alpha1
+        self.surface_alpha2 = surface_alpha2
+        self.surface_lambda1 = surface_lambda1
+        self.surface_lambda2 = surface_lambda2
+        self.surface_lambda3 = surface_lambda3
+        self.surface_lambda4 = surface_lambda4
+        self.adaptive_receptive_field = adaptive_receptive_field
+        self.adaptive_cutoff_alpha = adaptive_cutoff_alpha
+        self.adaptive_cutoff_sharpness = adaptive_cutoff_sharpness
 
     def forward(
         self,
@@ -361,6 +459,44 @@ class CHGNet(MatGLModel):
             },
         }
 
+        if self.surface_aware:
+            surface_degree, surface_normals = _compute_surface_descriptors(
+                g=g,
+                bond_vec=bond_vec,
+                bond_dist=bond_dist,
+                coord_r0=self.surface_coord_r0,
+                coord_power=self.surface_coord_power,
+                coord_ref=self.surface_coord_ref,
+                alpha1=self.surface_alpha1,
+                alpha2=self.surface_alpha2,
+            )
+            node_gate, edge_gate, c2 = _compute_surface_edge_gates(
+                g=g,
+                bond_vec=bond_vec,
+                bond_dist=bond_dist,
+                surface_degree=surface_degree,
+                surface_normals=surface_normals,
+                lambda1=self.surface_lambda1,
+                lambda2=self.surface_lambda2,
+                lambda3=self.surface_lambda3,
+                lambda4=self.surface_lambda4,
+                cutoff=self.cutoff,
+                adaptive_cutoff_alpha=self.adaptive_cutoff_alpha,
+                adaptive_sharpness=self.adaptive_cutoff_sharpness,
+                adaptive_receptive_field=self.adaptive_receptive_field,
+            )
+            g.ndata["surface_degree"] = surface_degree
+            g.ndata["surface_normal"] = surface_normals
+            g.edata["surface_c2"] = c2
+            g.edata["surface_gate_node"] = node_gate
+            g.edata["surface_gate_edge"] = edge_gate
+            bond_features = bond_features * edge_gate
+            fea_dict["surface"] = {
+                "surface_degree": surface_degree,
+                "surface_normal": surface_normals,
+                "surface_c2": c2,
+            }
+
         # create bond graph (line graph) with necessary node and edge data
         if self.use_bond_graph:
             if l_g is None:
@@ -380,6 +516,17 @@ class CHGNet(MatGLModel):
             bond_graph.apply_edges(compute_theta)
             bond_graph.edata["angle_expansion"] = self.angle_expansion(bond_graph.edata["theta"])  # type: ignore[misc]
             angle_features = self.angle_embedding(bond_graph.edata["angle_expansion"])  # type: ignore[misc]
+            if self.surface_aware:
+                bond_index = bond_graph.ndata["bond_index"]
+                bond_graph_node_gate = g.edata["surface_gate_edge"][bond_index]
+                bond_graph.ndata["surface_gate_node"] = bond_graph_node_gate
+                src_l, dst_l = bond_graph.edges()
+                center_idx = bond_graph.edata["center_atom_index"]
+                center_gate = 1.0 + self.surface_lambda1 * g.ndata["surface_degree"][center_idx]
+                bond_graph.edata["surface_gate"] = (
+                    bond_graph_node_gate[src_l] * bond_graph_node_gate[dst_l] * center_gate[:, None]
+                )
+                angle_features = angle_features * bond_graph.edata["surface_gate"]
             fea_dict["angle_expansion"] = bond_graph.edata["angle_expansion"]
             fea_dict["embedding"]["angle_feat"] = angle_features
         else:
@@ -483,6 +630,8 @@ class CHGNet(MatGLModel):
             "readout",
             "final",
         ] + [f"gc_{i + 1}" for i in range(self.n_blocks)]
+        if self.surface_aware:
+            allowed_output_layers.append("surface")
 
         if not return_features:
             output_layers = ["final"]
@@ -494,7 +643,10 @@ class CHGNet(MatGLModel):
         if graph_converter is None:
             from matgl.ext._pymatgen_dgl import Structure2Graph
 
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)
+            cutoff = self.cutoff
+            if self.surface_aware and self.adaptive_receptive_field:
+                cutoff = self.cutoff * (1.0 + self.adaptive_cutoff_alpha)
+            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=cutoff)
 
         graph, lattice, state_feats_default = graph_converter.get_graph(structure)
         graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lattice[0])
