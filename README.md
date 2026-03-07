@@ -92,6 +92,14 @@ export MATGL_CACHE=$(pwd)/.matgl_cache
 python dev/chgnet_env_check.py --device cuda
 ```
 
+## Training Guide
+
+See [TRAINING.md](TRAINING.md) for:
+- validated environment versions
+- stable OC22 finetuning command
+- smoke-run command
+- known stability settings
+
 ## Checkpoints (To Be Updated)
 
 We will publish our latest surface-aware CHGNet checkpoints here:
@@ -99,4 +107,3 @@ We will publish our latest surface-aware CHGNet checkpoints here:
 - [ ] `TBD`: pretrained surface-aware CHGNet checkpoint
 - [ ] `TBD`: training config and metrics table
 - [ ] `TBD`: inference/demo script for slab systems
-
