@@ -104,6 +104,6 @@ See [TRAINING.md](TRAINING.md) for:
 
 We will publish our latest surface-aware CHGNet checkpoints here:
 
-- [ ] `TBD`: pretrained surface-aware CHGNet checkpoint
-- [ ] `TBD`: training config and metrics table
+- [x] `pretrained_models/CHGNet-OC22-SurfaceAware-20k-v2/model.ckpt`
+- [x] `pretrained_models/CHGNet-OC22-SurfaceAware-20k-v2/README.md` (training config and metrics)
 - [ ] `TBD`: inference/demo script for slab systems

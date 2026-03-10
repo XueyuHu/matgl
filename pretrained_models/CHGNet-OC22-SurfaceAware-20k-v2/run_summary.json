@@ -1,0 +1,10 @@
+{
+  "pretrained_model": "pretrained_models/CHGNet-MatPES-PBE-2025.2.10-2.7M-PES",
+  "train_size": 20000,
+  "val_size": 4000,
+  "surface_aware": true,
+  "graph_cutoff": 8.100000000000001,
+  "threebody_cutoff": 3.0,
+  "run_dir": "/home/kaiwen/Desktop/SlabNet/matgl_surface_aware/matgl/runs/oc22_surface_chgnet_20k_final_v2",
+  "best_model_path": "/home/kaiwen/Desktop/SlabNet/matgl_surface_aware/matgl/runs/oc22_surface_chgnet_20k_final_v2/checkpoints/surface-chgnet-epoch=07-val_Total_Loss=0.0151.ckpt"
+}
