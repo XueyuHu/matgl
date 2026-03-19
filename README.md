@@ -106,4 +106,6 @@ We will publish our latest surface-aware CHGNet checkpoints here:
 
 - [x] `pretrained_models/CHGNet-OC22-SurfaceAware-20k-v2/model.ckpt`
 - [x] `pretrained_models/CHGNet-OC22-SurfaceAware-20k-v2/README.md` (training config and metrics)
+- [x] `pretrained_models/CHGNet-OC20_mid/model.ckpt` (plain CHGNet, surface-aware disabled)
+- [x] `pretrained_models/CHGNet-OC20_mid/README.md` (training config and metrics)
 - [ ] `TBD`: inference/demo script for slab systems
